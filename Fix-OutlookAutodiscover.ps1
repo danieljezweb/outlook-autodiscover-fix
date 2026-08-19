@@ -147,6 +147,93 @@ function Invoke-AutodiscoverCacheRefresh {
     Write-Host ""
 }
 
+function Backup-OutlookLocalData {
+    <#
+        New Outlook doesn't use a PST/OST file the way classic Outlook does - all mail
+        lives server-side (synced via IMAP/Graph). The closest thing to a local "data
+        file" is the Olk cache folder under LocalAppData, which can hold local drafts,
+        rules, and cached items. This copies that folder (and the classic signatures
+        folder, in case it's in use) to a timestamped backup location before any reset.
+
+        This is a safety net, not a full mail backup - actual mailbox content is on
+        the mail server and is unaffected by any of this.
+    #>
+    param(
+        [string]$DestinationRoot = (Join-Path $env:USERPROFILE "Desktop")
+    )
+
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $backupFolder = Join-Path $DestinationRoot "OutlookBackup_$timestamp"
+
+    Write-Host "Backing up local Outlook data before making changes..." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Note: your actual mailbox (emails, contacts, calendar) lives on the" -ForegroundColor DarkGray
+    Write-Host "mail server and is not affected by a reset. This backs up local" -ForegroundColor DarkGray
+    Write-Host "cache, drafts, and settings only, as an extra safety net." -ForegroundColor DarkGray
+    Write-Host ""
+
+    try {
+        New-Item -Path $backupFolder -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Write-Host "Could not create backup folder at $backupFolder ($($_.Exception.Message))." -ForegroundColor Red
+        return $null
+    }
+
+    $olkPath = Join-Path $env:LOCALAPPDATA "Microsoft\Olk"
+    $signaturesPath = Join-Path $env:APPDATA "Microsoft\Signatures"
+
+    $copied = @()
+
+    if (Test-Path $olkPath) {
+        try {
+            Write-Host "Copying new Outlook local data (Olk folder)..." -ForegroundColor Yellow
+            Copy-Item -Path $olkPath -Destination (Join-Path $backupFolder "Olk") -Recurse -Force -ErrorAction Stop
+            $copied += "Olk (new Outlook local cache/drafts)"
+            Write-Host "  Done." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "  Could not copy Olk folder: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "  This can happen if Outlook is currently running and has files locked -" -ForegroundColor Yellow
+            Write-Host "  close Outlook first and try again if this backup is important." -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "No new Outlook local data folder found at:" -ForegroundColor DarkYellow
+        Write-Host "  $olkPath" -ForegroundColor DarkYellow
+    }
+
+    if (Test-Path $signaturesPath) {
+        try {
+            Write-Host "Copying signatures folder..." -ForegroundColor Yellow
+            Copy-Item -Path $signaturesPath -Destination (Join-Path $backupFolder "Signatures") -Recurse -Force -ErrorAction Stop
+            $copied += "Signatures"
+            Write-Host "  Done." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "  Could not copy Signatures folder: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Host "No local Signatures folder found (normal for new Outlook, which stores" -ForegroundColor DarkYellow
+        Write-Host "signatures in the cloud rather than locally)." -ForegroundColor DarkYellow
+    }
+
+    Write-Host ""
+    if ($copied.Count -gt 0) {
+        $sizeBytes = (Get-ChildItem -Path $backupFolder -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $sizeMb = if ($sizeBytes) { [math]::Round($sizeBytes / 1MB, 1) } else { 0 }
+        Write-Host "Backup complete: $($copied -join ', ')" -ForegroundColor Green
+        Write-Host "Location: $backupFolder" -ForegroundColor Green
+        Write-Host "Size: $sizeMb MB" -ForegroundColor Green
+        return $backupFolder
+    }
+    else {
+        Write-Host "Nothing was backed up (no matching local folders found)." -ForegroundColor Yellow
+        return $null
+    }
+}
+
 function Invoke-OutlookReset {
     param([switch]$DryRun)
 
@@ -183,6 +270,15 @@ function Show-Footer {
     Write-Host "===================================================" -ForegroundColor Cyan
 }
 
+function Confirm-BackupBeforeReset {
+    $backupAnswer = Read-Host "Back up local Outlook data first (recommended)? (Y/n)"
+    if ($backupAnswer -notmatch "^[Nn]") {
+        Write-Host ""
+        Backup-OutlookLocalData | Out-Null
+        Write-Host ""
+    }
+}
+
 # ===================================================================
 # Menu actions
 # ===================================================================
@@ -204,6 +300,7 @@ function Run-StandardFix {
     $resetAnswer = Read-Host "Do you also want to reset new Outlook now (clears local accounts/cache, you'll re-add accounts after)? (y/N)"
     Write-Host ""
     if ($resetAnswer -match "^[Yy]") {
+        Confirm-BackupBeforeReset
         Invoke-OutlookReset
     }
     else {
@@ -265,6 +362,17 @@ function Run-WhatIfMode {
     Show-Footer
 }
 
+function Run-BackupOnly {
+    Show-Header -Subtitle "Backup Local Outlook Data"
+    Write-Host "Copies new Outlook's local data folder (drafts/cache) and the" -ForegroundColor White
+    Write-Host "signatures folder to a timestamped backup on the Desktop." -ForegroundColor White
+    Write-Host ""
+    Write-Host "Your actual mailbox (emails, contacts, calendar) lives on the mail" -ForegroundColor White
+    Write-Host "server and is unaffected either way - this is just a local safety net." -ForegroundColor White
+    Write-Host ""
+    Backup-OutlookLocalData | Out-Null
+}
+
 function Run-OutlookResetOnly {
     Show-Header -Subtitle "Reset New Outlook Only"
     Write-Host "This clears new Outlook's LOCAL profile/cache and removes accounts" -ForegroundColor White
@@ -276,6 +384,7 @@ function Run-OutlookResetOnly {
     $confirm = Read-Host "Are you sure you want to reset new Outlook now? (y/N)"
     Write-Host ""
     if ($confirm -match "^[Yy]") {
+        Confirm-BackupBeforeReset
         Invoke-OutlookReset
     }
     else {
@@ -297,6 +406,10 @@ function Show-About {
     Write-Host "otherwise. The optional Outlook reset only clears the LOCAL Outlook" -ForegroundColor White
     Write-Host "profile/cache on this PC." -ForegroundColor White
     Write-Host ""
+    Write-Host "New Outlook has no PST/OST file like classic Outlook - all mail lives" -ForegroundColor White
+    Write-Host "on the server. The backup option copies the local Olk cache/drafts" -ForegroundColor White
+    Write-Host "folder as an extra safety net before any reset, not a full mail backup." -ForegroundColor White
+    Write-Host ""
     Write-Host "Repo: https://github.com/danieljezweb/outlook-autodiscover-fix" -ForegroundColor DarkGray
     Write-Host ""
     Read-Host "Press Enter to return to the menu"
@@ -314,21 +427,23 @@ function Show-MainMenu {
         Write-Host "  1. Fix a failing account (refresh cache + optional Outlook reset)" -ForegroundColor White
         Write-Host "  2. Test Mode - check DNS + refresh cache only (safe, no Outlook changes)" -ForegroundColor White
         Write-Host "  3. WhatIf Mode - dry run of the full flow (safe, for demos)" -ForegroundColor White
-        Write-Host "  4. Reset new Outlook only (local profile/cache, no cache refresh)" -ForegroundColor White
-        Write-Host "  5. About this tool" -ForegroundColor White
-        Write-Host "  6. Exit" -ForegroundColor White
+        Write-Host "  4. Backup local Outlook data (recommended before any reset)" -ForegroundColor White
+        Write-Host "  5. Reset new Outlook only (local profile/cache, no cache refresh)" -ForegroundColor White
+        Write-Host "  6. About this tool" -ForegroundColor White
+        Write-Host "  7. Exit" -ForegroundColor White
         Write-Host ""
-        $choice = Read-Host "Enter a number (1-6)"
+        $choice = Read-Host "Enter a number (1-7)"
         Write-Host ""
 
         switch ($choice) {
             "1" { Run-StandardFix;      Read-Host "`nPress Enter to return to the menu" }
             "2" { Run-TestMode;         Read-Host "`nPress Enter to return to the menu" }
             "3" { Run-WhatIfMode;       Read-Host "`nPress Enter to return to the menu" }
-            "4" { Run-OutlookResetOnly; Read-Host "`nPress Enter to return to the menu" }
-            "5" { Show-About }
-            "6" { Write-Host "Bye!" -ForegroundColor Cyan; return }
-            default { Write-Host "Please enter a number from 1 to 6." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+            "4" { Run-BackupOnly;       Read-Host "`nPress Enter to return to the menu" }
+            "5" { Run-OutlookResetOnly; Read-Host "`nPress Enter to return to the menu" }
+            "6" { Show-About }
+            "7" { Write-Host "Bye!" -ForegroundColor Cyan; return }
+            default { Write-Host "Please enter a number from 1 to 7." -ForegroundColor Red; Start-Sleep -Seconds 1 }
         }
     }
 }
@@ -372,6 +487,7 @@ else {
 
     $resetAnswer = Read-Host "Do you also want to reset new Outlook now (clears local accounts/cache, you'll re-add accounts after)? (y/N)"
     if ($resetAnswer -match "^[Yy]") {
+        if (-not $WhatIf) { Confirm-BackupBeforeReset }
         Invoke-OutlookReset -DryRun:$WhatIf
     }
     else {

@@ -37,16 +37,29 @@ Running the script with no parameters shows:
 1. Fix a failing account (refresh cache + optional Outlook reset)
 2. Test Mode - check DNS + refresh cache only (safe, no Outlook changes)
 3. WhatIf Mode - dry run of the full flow (safe, for demos)
-4. Reset new Outlook only (local profile/cache, no cache refresh)
-5. About this tool
-6. Exit
+4. Backup local Outlook data (recommended before any reset)
+5. Reset new Outlook only (local profile/cache, no cache refresh)
+6. About this tool
+7. Exit
 ```
 
-- **Option 1** is the normal client-facing fix: prompts for the email address, refreshes Microsoft's autodiscover cache, then asks before optionally resetting new Outlook.
+- **Option 1** is the normal client-facing fix: prompts for the email address, refreshes Microsoft's autodiscover cache, then asks before optionally resetting new Outlook (with a backup prompt first).
 - **Option 2 (Test Mode)** checks autodiscover DNS records (CNAME/A + SRV) for the domain and sends the cache-refresh request, but never touches Outlook and doesn't need a real mailbox. Safe to run against production domains.
 - **Option 3 (WhatIf Mode)** runs the full flow for real, except the Outlook reset step is only simulated — useful for demos or training without risking a real profile.
-- **Option 4** just resets new Outlook's local profile/cache on its own, for cases where the account is already set up correctly but Outlook itself is stuck.
-- **Option 5** shows a short explanation of what the tool does and doesn't do.
+- **Option 4 (Backup)** copies new Outlook's local data folder and signatures to a timestamped folder on the Desktop, as a safety net before any reset. See below for what this actually covers.
+- **Option 5** just resets new Outlook's local profile/cache on its own (also offering a backup first), for cases where the account is already set up correctly but Outlook itself is stuck.
+- **Option 6** shows a short explanation of what the tool does and doesn't do.
+
+## About the backup option
+
+New Outlook doesn't use a PST/OST data file the way classic Outlook does — at time of writing, new Outlook for Windows does not support personal folders (PST) at all. All mail, contacts, and calendar data lives on the mail server and is synced live; a local reset doesn't delete any of that.
+
+What the backup option actually copies, as an extra safety net:
+
+- `%LocalAppData%\Microsoft\Olk` — new Outlook's local cache/drafts folder
+- `%AppData%\Microsoft\Signatures` — classic signatures folder, if present (new Outlook normally stores signatures in the cloud, so this folder may not exist)
+
+Backups are saved to a timestamped folder on the Desktop, e.g. `OutlookBackup_20260819_143000`. This is a local safety net for drafts/cache, not a full mailbox export — there is nothing to "restore" from it in the traditional PST-import sense, but it preserves anything that may not have fully synced yet.
 
 ## Direct-parameter mode (for scripting / RMM)
 
