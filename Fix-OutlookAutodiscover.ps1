@@ -130,12 +130,13 @@ function Invoke-AutodiscoverCacheRefresh {
     Write-Host " it does not delete or clear any mailbox/account data.)" -ForegroundColor DarkGray
     Write-Host ""
 
-    # Microsoft has changed this endpoint's hostname before without notice (the original
-    # prod-autodetect.outlookmobile.com host can return NXDOMAIN). Try known candidates
-    # in order and use whichever one actually resolves and responds.
+    # Microsoft has changed this endpoint's hostname before without notice - the original
+    # prod-autodetect.outlookmobile.com host now returns NXDOMAIN. Confirmed working
+    # endpoint (as of testing 2026-08-19) is listed first, with older/alternate hostnames
+    # kept as fallback in case Microsoft moves it again.
     $candidateHosts = @(
-        "prod-autodetect.outlookmobile.com",
         "prod.autodetect.outlook.cloud.microsoft",
+        "prod-autodetect.outlookmobile.com",
         "autodetect.outlookmobile.com"
     )
 
