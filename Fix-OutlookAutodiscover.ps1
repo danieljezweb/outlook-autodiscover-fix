@@ -9,104 +9,104 @@
     Rackspace -> Axigen), that cache can be stale, causing new Outlook to fail to add
     the account, loop on sign-in, or ask for an "app password".
 
-    This script forces Microsoft's cache to refresh for the given email address, then
-    optionally resets new Outlook so it picks up the corrected settings cleanly.
+    Run with no parameters to get an interactive menu covering all the tool's options.
+    Parameters can also be passed directly for scripted/RMM use, which skips the menu.
 
 .PARAMETER EmailAddress
-    The email address to refresh. If omitted, the script will prompt for it
-    (except in -TestMode, where a domain is enough).
+    The email address to refresh. If omitted in direct-parameter mode, the script
+    will prompt for it.
 
 .PARAMETER TestMode
     Safe validation mode for use on a test VM or before a client rollout.
     - Checks that autodiscover DNS records resolve correctly for the domain
-    - Sends the Microsoft cache-refresh request (this part is non-destructive
-      even against a real domain, so it's safe to run against production domains too)
+    - Sends the Microsoft cache-refresh request (non-destructive, safe even on
+      production domains)
     - Never touches Outlook (no process kill, no reset) - just reports what it finds
     - Does not require a real mailbox to exist
 
 .PARAMETER WhatIf
     Shows what the script WOULD do at the Outlook-reset step, without actually
-    closing Outlook or resetting it. Use this to demo/validate the script flow
-    safely. The DNS check and cache-refresh request still run for real, since
-    those are non-destructive.
+    closing Outlook or resetting it. The DNS check and cache-refresh request still
+    run for real, since those are non-destructive.
+
+.PARAMETER Menu
+    Forces the interactive menu to show even if other parameters were passed.
+
+.EXAMPLE
+    .\Fix-OutlookAutodiscover.ps1
+    Shows the interactive main menu.
 
 .EXAMPLE
     .\Fix-OutlookAutodiscover.ps1 -TestMode -EmailAddress test@yourtestdomain.com.au
-    Validates DNS + cache refresh only, for use on a test VM. Nothing on the
-    machine is changed.
-
-.EXAMPLE
-    .\Fix-OutlookAutodiscover.ps1 -WhatIf
-    Runs the full interactive flow but only simulates the Outlook reset step.
+    Skips the menu, runs test mode directly. Useful for scripting.
 
 .EXAMPLE
     .\Fix-OutlookAutodiscover.ps1 -EmailAddress name@client-domain.com.au
-    Full run for a real client account (will still prompt before resetting Outlook).
+    Skips the menu, runs the full fix directly (still prompts before resetting Outlook).
 #>
 
 param(
     [string]$EmailAddress,
     [switch]$TestMode,
-    [switch]$WhatIf
+    [switch]$WhatIf,
+    [switch]$Menu
 )
 
-Write-Host "===================================================" -ForegroundColor Cyan
-Write-Host " Outlook Autodiscover Cache Refresh (Jezweb)" -ForegroundColor Cyan
-if ($TestMode) { Write-Host " *** TEST MODE - no changes will be made to Outlook ***" -ForegroundColor Magenta }
-if ($WhatIf)   { Write-Host " *** -WhatIf active - Outlook reset step will be simulated only ***" -ForegroundColor Magenta }
-Write-Host "===================================================" -ForegroundColor Cyan
-Write-Host ""
+# ===================================================================
+# Shared functions
+# ===================================================================
 
-# --- Step 1: Get the email address / domain to work with ---
-if ([string]::IsNullOrWhiteSpace($EmailAddress)) {
-    if ($TestMode) {
-        $EmailAddress = Read-Host "Enter a test email address, or just a domain (e.g. test@yourtestdomain.com.au)"
+function Show-Header {
+    param([string]$Subtitle)
+    Clear-Host
+    Write-Host "===================================================" -ForegroundColor Cyan
+    Write-Host " Outlook Autodiscover Fix Tool (Jezweb)" -ForegroundColor Cyan
+    if ($Subtitle) { Write-Host " $Subtitle" -ForegroundColor Magenta }
+    Write-Host "===================================================" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+function Read-EmailOrDomain {
+    param(
+        [string]$Prompt,
+        [switch]$AllowBareDomain
+    )
+    $value = Read-Host $Prompt
+
+    if ($AllowBareDomain -and ($value -notmatch "@")) {
+        $value = "autodiscover-test@$value"
     }
-    else {
-        $EmailAddress = Read-Host "Enter the full email address that is failing to add (e.g. name@yourdomain.com.au)"
+
+    if ([string]::IsNullOrWhiteSpace($value) -or ($value -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$")) {
+        Write-Host "That doesn't look like a valid email address (or domain). Please try again." -ForegroundColor Red
+        return $null
     }
+    return $value
 }
 
-# Allow TestMode to accept a bare domain (no @) and turn it into a throwaway address
-if ($TestMode -and ($EmailAddress -notmatch "@")) {
-    $EmailAddress = "autodiscover-test@$EmailAddress"
-}
+function Test-AutodiscoverDns {
+    param([string]$Domain)
 
-if ([string]::IsNullOrWhiteSpace($EmailAddress) -or ($EmailAddress -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$")) {
-    Write-Host "That doesn't look like a valid email address (or domain in -TestMode). Please re-run and try again." -ForegroundColor Red
-    exit 1
-}
-
-$domain = $EmailAddress.Split("@")[1]
-
-Write-Host ""
-Write-Host "Working with:" -ForegroundColor Yellow
-Write-Host "  Email/identifier : $EmailAddress" -ForegroundColor Yellow
-Write-Host "  Domain           : $domain" -ForegroundColor Yellow
-Write-Host ""
-
-# --- Step 2 (TestMode only): Check autodiscover DNS records resolve ---
-if ($TestMode) {
-    Write-Host "--- DNS check: autodiscover.$domain ---" -ForegroundColor Cyan
+    Write-Host "--- DNS check: autodiscover.$Domain ---" -ForegroundColor Cyan
     try {
-        $cname = Resolve-DnsName -Name "autodiscover.$domain" -Type CNAME -ErrorAction Stop
+        $cname = Resolve-DnsName -Name "autodiscover.$Domain" -Type CNAME -ErrorAction Stop
         Write-Host "CNAME found:" -ForegroundColor Green
         $cname | Select-Object Name, NameHost | Format-Table -AutoSize | Out-String | Write-Host
     }
     catch {
-        Write-Host "No CNAME record found for autodiscover.$domain (or it's an A record instead)." -ForegroundColor Yellow
+        Write-Host "No CNAME record found for autodiscover.$Domain (or it's an A record instead)." -ForegroundColor Yellow
         try {
-            $arec = Resolve-DnsName -Name "autodiscover.$domain" -Type A -ErrorAction Stop
+            $arec = Resolve-DnsName -Name "autodiscover.$Domain" -Type A -ErrorAction Stop
             Write-Host "A record found:" -ForegroundColor Green
             $arec | Select-Object Name, IPAddress | Format-Table -AutoSize | Out-String | Write-Host
         }
         catch {
-            Write-Host "No autodiscover record resolves at all for $domain - this needs fixing in DNS before Outlook autodiscover can work." -ForegroundColor Red
+            Write-Host "No autodiscover record resolves at all for $Domain - this needs fixing in DNS before Outlook autodiscover can work." -ForegroundColor Red
         }
     }
 
     Write-Host "--- DNS check: SRV records ---" -ForegroundColor Cyan
-    foreach ($srv in @("_imaps._tcp.$domain", "_submission._tcp.$domain", "_autodiscover._tcp.$domain")) {
+    foreach ($srv in @("_imaps._tcp.$Domain", "_submission._tcp.$Domain", "_autodiscover._tcp.$Domain")) {
         try {
             $srvRec = Resolve-DnsName -Name $srv -Type SRV -ErrorAction Stop
             Write-Host "$srv -> found" -ForegroundColor Green
@@ -119,75 +119,264 @@ if ($TestMode) {
     Write-Host ""
 }
 
-# --- Step 3: Force the Microsoft cloud cache to refresh (safe / non-destructive) ---
-Write-Host "Requesting Microsoft to refresh its cached autodiscover data for:" -ForegroundColor Yellow
-Write-Host "  $EmailAddress" -ForegroundColor Yellow
-Write-Host ""
+function Invoke-AutodiscoverCacheRefresh {
+    param([string]$EmailAddress)
 
-try {
-    $uri = "https://prod-autodetect.outlookmobile.com/detect?services=office365,outlook,google,icloud,yahoo&protocols=rest-cloud,rest-outlook,rest-office365,eas,imap,smtp"
-    $response = Invoke-WebRequest -Uri $uri -Headers @{ "x-email" = $EmailAddress } -UseBasicParsing -ErrorAction Stop
-    Write-Host "Request sent successfully (HTTP $($response.StatusCode))." -ForegroundColor Green
+    Write-Host "Requesting Microsoft to refresh its cached autodiscover data for:" -ForegroundColor Yellow
+    Write-Host "  $EmailAddress" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "Response headers:" -ForegroundColor DarkGray
-    $response.Headers | Format-Table -AutoSize | Out-String | Write-Host
-}
-catch {
-    Write-Host "The refresh request failed: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "You can still continue and try adding the account again - this step is often silent even when it works." -ForegroundColor Yellow
-}
-
-Write-Host ""
-Write-Host "Cache refresh request complete." -ForegroundColor Green
-Write-Host ""
-
-# --- Step 4: TestMode stops here - never touches Outlook ---
-if ($TestMode) {
-    Write-Host "===================================================" -ForegroundColor Cyan
-    Write-Host " TEST MODE COMPLETE - Outlook was not touched." -ForegroundColor Cyan
-    Write-Host " Review the DNS results and cache-refresh response above." -ForegroundColor Cyan
-    Write-Host " If DNS looks correct, try adding a real test mailbox in new" -ForegroundColor Cyan
-    Write-Host " Outlook on this VM now to confirm the fix actually works." -ForegroundColor Cyan
-    Write-Host "===================================================" -ForegroundColor Cyan
-    exit 0
-}
-
-# --- Step 5: Offer to reset new Outlook (real runs only) ---
-$resetAnswer = Read-Host "Do you also want to reset new Outlook now (clears local accounts/cache, you'll re-add accounts after)? (y/N)"
-
-if ($resetAnswer -match "^[Yy]") {
+    Write-Host "(This only tells Microsoft to re-check the domain's settings -" -ForegroundColor DarkGray
+    Write-Host " it does not delete or clear any mailbox/account data.)" -ForegroundColor DarkGray
     Write-Host ""
-    if ($WhatIf) {
+
+    try {
+        $uri = "https://prod-autodetect.outlookmobile.com/detect?services=office365,outlook,google,icloud,yahoo&protocols=rest-cloud,rest-outlook,rest-office365,eas,imap,smtp"
+        $response = Invoke-WebRequest -Uri $uri -Headers @{ "x-email" = $EmailAddress } -UseBasicParsing -ErrorAction Stop
+        Write-Host "Request sent successfully (HTTP $($response.StatusCode))." -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Response headers:" -ForegroundColor DarkGray
+        $response.Headers | Format-Table -AutoSize | Out-String | Write-Host
+    }
+    catch {
+        Write-Host "The refresh request failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "You can still continue and try adding the account again - this step is often silent even when it works." -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "Cache refresh request complete." -ForegroundColor Green
+    Write-Host ""
+}
+
+function Invoke-OutlookReset {
+    param([switch]$DryRun)
+
+    if ($DryRun) {
         Write-Host "[WhatIf] Would stop any running 'olk' processes." -ForegroundColor Magenta
         Write-Host "[WhatIf] Would wait 2 seconds." -ForegroundColor Magenta
         Write-Host "[WhatIf] Would run: olk.exe --reset" -ForegroundColor Magenta
         Write-Host "No changes were actually made (WhatIf mode)." -ForegroundColor Green
+        return
+    }
+
+    Write-Host "Closing Outlook if it's running..." -ForegroundColor Yellow
+    Get-Process -Name "olk" -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 2
+
+    Write-Host "Resetting new Outlook (local profile/cache only - nothing server-side is affected)..." -ForegroundColor Yellow
+    try {
+        Start-Process "olk.exe" -ArgumentList "--reset"
+        Write-Host "Reset command sent. A confirmation dialog should appear in Outlook - follow the prompts." -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Could not launch olk.exe --reset automatically ($($_.Exception.Message))." -ForegroundColor Red
+        Write-Host "You can run this manually: Win+R -> olk.exe --reset" -ForegroundColor Yellow
+    }
+}
+
+function Show-Footer {
+    Write-Host ""
+    Write-Host "===================================================" -ForegroundColor Cyan
+    Write-Host " If the account still fails to add:" -ForegroundColor Cyan
+    Write-Host "  1. Wait 5-10 minutes (cache refresh isn't always instant)" -ForegroundColor White
+    Write-Host "  2. Try again, choosing 'Advanced options' -> manual IMAP setup" -ForegroundColor White
+    Write-Host "  3. Contact Jezweb support with a screenshot of the error" -ForegroundColor White
+    Write-Host "===================================================" -ForegroundColor Cyan
+}
+
+# ===================================================================
+# Menu actions
+# ===================================================================
+
+function Run-StandardFix {
+    Show-Header -Subtitle "Standard Fix"
+    Write-Host "This refreshes Microsoft's autodiscover cache for a failing account," -ForegroundColor White
+    Write-Host "then optionally resets new Outlook's local profile." -ForegroundColor White
+    Write-Host ""
+
+    $email = $null
+    while (-not $email) {
+        $email = Read-EmailOrDomain -Prompt "Enter the full email address that is failing to add (e.g. name@yourdomain.com.au)"
+    }
+
+    Write-Host ""
+    Invoke-AutodiscoverCacheRefresh -EmailAddress $email
+
+    $resetAnswer = Read-Host "Do you also want to reset new Outlook now (clears local accounts/cache, you'll re-add accounts after)? (y/N)"
+    Write-Host ""
+    if ($resetAnswer -match "^[Yy]") {
+        Invoke-OutlookReset
     }
     else {
-        Write-Host "Closing Outlook if it's running..." -ForegroundColor Yellow
-        Get-Process -Name "olk" -ErrorAction SilentlyContinue | Stop-Process -Force
-        Start-Sleep -Seconds 2
+        Write-Host "Skipping Outlook reset. Try adding/re-adding the account in new Outlook now." -ForegroundColor Cyan
+    }
 
-        Write-Host "Resetting new Outlook..." -ForegroundColor Yellow
-        try {
-            Start-Process "olk.exe" -ArgumentList "--reset"
-            Write-Host "Reset command sent. A confirmation dialog should appear in Outlook - follow the prompts." -ForegroundColor Green
-        }
-        catch {
-            Write-Host "Could not launch olk.exe --reset automatically ($($_.Exception.Message))." -ForegroundColor Red
-            Write-Host "You can run this manually: Win+R -> olk.exe --reset" -ForegroundColor Yellow
+    Show-Footer
+}
+
+function Run-TestMode {
+    Show-Header -Subtitle "Test Mode (safe - no changes to Outlook)"
+    Write-Host "Checks autodiscover DNS records and sends the Microsoft cache-refresh" -ForegroundColor White
+    Write-Host "request. Never touches Outlook. Safe to run against real domains too." -ForegroundColor White
+    Write-Host ""
+
+    $email = $null
+    while (-not $email) {
+        $email = Read-EmailOrDomain -Prompt "Enter a test email address, or just a domain (e.g. test@yourtestdomain.com.au)" -AllowBareDomain
+    }
+
+    $domain = $email.Split("@")[1]
+    Write-Host ""
+    Write-Host "Domain: $domain" -ForegroundColor Yellow
+    Write-Host ""
+
+    Test-AutodiscoverDns -Domain $domain
+    Invoke-AutodiscoverCacheRefresh -EmailAddress $email
+
+    Write-Host "===================================================" -ForegroundColor Cyan
+    Write-Host " TEST MODE COMPLETE - Outlook was not touched." -ForegroundColor Cyan
+    Write-Host " If DNS looks correct, try adding a real test mailbox in new" -ForegroundColor Cyan
+    Write-Host " Outlook on this VM now to confirm the fix actually works." -ForegroundColor Cyan
+    Write-Host "===================================================" -ForegroundColor Cyan
+}
+
+function Run-WhatIfMode {
+    Show-Header -Subtitle "WhatIf Mode (dry run of the Outlook reset step)"
+    Write-Host "Runs the full flow for real, except the Outlook reset step is only" -ForegroundColor White
+    Write-Host "simulated (nothing closed or reset). Good for demos/training." -ForegroundColor White
+    Write-Host ""
+
+    $email = $null
+    while (-not $email) {
+        $email = Read-EmailOrDomain -Prompt "Enter the full email address that is failing to add (e.g. name@yourdomain.com.au)"
+    }
+
+    Write-Host ""
+    Invoke-AutodiscoverCacheRefresh -EmailAddress $email
+
+    $resetAnswer = Read-Host "Do you also want to reset new Outlook now (SIMULATED - nothing will actually change)? (y/N)"
+    Write-Host ""
+    if ($resetAnswer -match "^[Yy]") {
+        Invoke-OutlookReset -DryRun
+    }
+    else {
+        Write-Host "Skipping Outlook reset." -ForegroundColor Cyan
+    }
+
+    Show-Footer
+}
+
+function Run-OutlookResetOnly {
+    Show-Header -Subtitle "Reset New Outlook Only"
+    Write-Host "This clears new Outlook's LOCAL profile/cache and removes accounts" -ForegroundColor White
+    Write-Host "from the profile. Nothing on any mail server is affected." -ForegroundColor White
+    Write-Host "Use this if the account is already correctly set up but Outlook" -ForegroundColor White
+    Write-Host "itself is stuck or misbehaving." -ForegroundColor White
+    Write-Host ""
+
+    $confirm = Read-Host "Are you sure you want to reset new Outlook now? (y/N)"
+    Write-Host ""
+    if ($confirm -match "^[Yy]") {
+        Invoke-OutlookReset
+    }
+    else {
+        Write-Host "Cancelled - no changes made." -ForegroundColor Cyan
+    }
+}
+
+function Show-About {
+    Show-Header -Subtitle "About This Tool"
+    Write-Host "New Outlook doesn't query the mail server directly for autodiscover -" -ForegroundColor White
+    Write-Host "it goes through a Microsoft cloud endpoint that caches domain settings." -ForegroundColor White
+    Write-Host "After a domain moves to Axigen, that cache can go stale, causing:" -ForegroundColor White
+    Write-Host "  - New Outlook failing to add the account" -ForegroundColor White
+    Write-Host "  - Sign-in loops" -ForegroundColor White
+    Write-Host "  - A false 'you might need an app password' error" -ForegroundColor White
+    Write-Host ""
+    Write-Host "This tool tells Microsoft to refresh that cached data. It does NOT" -ForegroundColor White
+    Write-Host "delete or clear any mailbox/account data anywhere - server-side or" -ForegroundColor White
+    Write-Host "otherwise. The optional Outlook reset only clears the LOCAL Outlook" -ForegroundColor White
+    Write-Host "profile/cache on this PC." -ForegroundColor White
+    Write-Host ""
+    Write-Host "Repo: https://github.com/danieljezweb/outlook-autodiscover-fix" -ForegroundColor DarkGray
+    Write-Host ""
+    Read-Host "Press Enter to return to the menu"
+}
+
+# ===================================================================
+# Main menu
+# ===================================================================
+
+function Show-MainMenu {
+    while ($true) {
+        Show-Header
+        Write-Host "What would you like to do?" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  1. Fix a failing account (refresh cache + optional Outlook reset)" -ForegroundColor White
+        Write-Host "  2. Test Mode - check DNS + refresh cache only (safe, no Outlook changes)" -ForegroundColor White
+        Write-Host "  3. WhatIf Mode - dry run of the full flow (safe, for demos)" -ForegroundColor White
+        Write-Host "  4. Reset new Outlook only (local profile/cache, no cache refresh)" -ForegroundColor White
+        Write-Host "  5. About this tool" -ForegroundColor White
+        Write-Host "  6. Exit" -ForegroundColor White
+        Write-Host ""
+        $choice = Read-Host "Enter a number (1-6)"
+        Write-Host ""
+
+        switch ($choice) {
+            "1" { Run-StandardFix;      Read-Host "`nPress Enter to return to the menu" }
+            "2" { Run-TestMode;         Read-Host "`nPress Enter to return to the menu" }
+            "3" { Run-WhatIfMode;       Read-Host "`nPress Enter to return to the menu" }
+            "4" { Run-OutlookResetOnly; Read-Host "`nPress Enter to return to the menu" }
+            "5" { Show-About }
+            "6" { Write-Host "Bye!" -ForegroundColor Cyan; return }
+            default { Write-Host "Please enter a number from 1 to 6." -ForegroundColor Red; Start-Sleep -Seconds 1 }
         }
     }
 }
-else {
-    Write-Host ""
-    Write-Host "Skipping Outlook reset. Try adding/re-adding the account in new Outlook now." -ForegroundColor Cyan
-}
 
-Write-Host ""
-Write-Host "===================================================" -ForegroundColor Cyan
-Write-Host " Done. If the account still fails to add:" -ForegroundColor Cyan
-Write-Host "  1. Wait 5-10 minutes (cache refresh isn't always instant)" -ForegroundColor White
-Write-Host "  2. Try again, choosing 'Advanced options' -> manual IMAP setup" -ForegroundColor White
-Write-Host "  3. Contact Jezweb support with a screenshot of the error" -ForegroundColor White
-Write-Host "===================================================" -ForegroundColor Cyan
+# ===================================================================
+# Entry point
+# ===================================================================
+
+$hasDirectParams = $EmailAddress -or $TestMode -or $WhatIf
+
+if ($Menu -or -not $hasDirectParams) {
+    Show-MainMenu
+}
+else {
+    # Backward-compatible direct-parameter mode (for scripted/RMM use)
+    if (-not $EmailAddress) {
+        if ($TestMode) {
+            $EmailAddress = Read-Host "Enter a test email address, or just a domain (e.g. test@yourtestdomain.com.au)"
+            if ($EmailAddress -notmatch "@") { $EmailAddress = "autodiscover-test@$EmailAddress" }
+        }
+        else {
+            $EmailAddress = Read-Host "Enter the full email address that is failing to add (e.g. name@yourdomain.com.au)"
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($EmailAddress) -or ($EmailAddress -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$")) {
+        Write-Host "That doesn't look like a valid email address. Please re-run and try again." -ForegroundColor Red
+        exit 1
+    }
+
+    $domain = $EmailAddress.Split("@")[1]
+
+    if ($TestMode) {
+        Test-AutodiscoverDns -Domain $domain
+        Invoke-AutodiscoverCacheRefresh -EmailAddress $EmailAddress
+        Write-Host "TEST MODE COMPLETE - Outlook was not touched." -ForegroundColor Cyan
+        exit 0
+    }
+
+    Invoke-AutodiscoverCacheRefresh -EmailAddress $EmailAddress
+
+    $resetAnswer = Read-Host "Do you also want to reset new Outlook now (clears local accounts/cache, you'll re-add accounts after)? (y/N)"
+    if ($resetAnswer -match "^[Yy]") {
+        Invoke-OutlookReset -DryRun:$WhatIf
+    }
+    else {
+        Write-Host "Skipping Outlook reset. Try adding/re-adding the account in new Outlook now." -ForegroundColor Cyan
+    }
+
+    Show-Footer
+}
