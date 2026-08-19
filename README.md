@@ -4,13 +4,15 @@ PowerShell tool to fix new Outlook autodiscover/sign-in failures after Rackspace
 
 ## The problem
 
-New Outlook for Windows doesn't query the mail server directly for autodiscover — it goes through a Microsoft cloud endpoint (`prod-autodetect.outlookmobile.com`) which caches domain configuration. After a domain is migrated to a new mail server (e.g. Rackspace → Axigen), that cache can be stale, causing new Outlook to:
+New Outlook for Windows doesn't query the mail server directly for autodiscover — it goes through a Microsoft cloud endpoint which caches domain configuration. After a domain is migrated to a new mail server (e.g. Rackspace → Axigen), that cache can be stale, causing new Outlook to:
 
 - Fail to add the account entirely
 - Loop on sign-in
 - Prompt for an "app password" (which Axigen doesn't support)
 
 This tool refreshes Microsoft's cache for the affected email address, and separately can reset new Outlook so it picks up the corrected settings cleanly. **It does not delete or clear any mailbox/account data anywhere** — refreshing the cache never touches Outlook at all, and the separate reset option only clears the local Outlook profile on that one PC.
+
+> **Note on the Microsoft endpoint:** Microsoft has changed the hostname behind this cache-refresh endpoint before without documenting it (`prod-autodetect.outlookmobile.com` has previously started returning NXDOMAIN). The script tries several known candidate hostnames automatically and reports which one worked. If none of them work, use the manual tool at https://aka.ms/autodetect as a fallback.
 
 ## Quick run (no download needed)
 
@@ -45,7 +47,7 @@ Running the script with no parameters shows:
 
 Refreshing the cache and resetting Outlook are **two completely separate options** — running option 1 never touches Outlook, and option 2 never touches Microsoft's autodiscover cache. This keeps each action predictable and means nobody accidentally resets a profile while just trying to fix a cache issue.
 
-- **Option 1** is the normal client-facing fix: prompts for the email address and refreshes Microsoft's autodiscover cache only.
+- **Option 1** is the normal client-facing fix: prompts for the email address and refreshes Microsoft's autodiscover cache only. Tries multiple known Microsoft endpoint hostnames in case the primary one has changed.
 - **Option 2** resets new Outlook's local profile/cache on its own, offering a backup first. Use this for cases where the account is already set up correctly but Outlook itself is stuck.
 - **Option 3 (Backup)** copies new Outlook's local data folder and signatures to a timestamped folder on the Desktop, as a safety net before any reset. See below for what this actually covers.
 - **Option 4 (Test Mode)** checks autodiscover DNS records (CNAME/A + SRV) for the domain and sends the cache-refresh request, but never touches Outlook and doesn't need a real mailbox. Safe to run against production domains.
@@ -62,6 +64,17 @@ What the backup option actually copies, as an extra safety net:
 - `%AppData%\Microsoft\Signatures` — classic signatures folder, if present (new Outlook normally stores signatures in the cloud, so this folder may not exist)
 
 Backups are saved to a timestamped folder on the Desktop, e.g. `OutlookBackup_20260819_143000`. This is a local safety net for drafts/cache, not a full mailbox export — there is nothing to "restore" from it in the traditional PST-import sense, but it preserves anything that may not have fully synced yet.
+
+## About the autodetect endpoint fallback
+
+The cache-refresh request goes to a Microsoft-hosted endpoint that this tool doesn't control. Microsoft has been observed changing this endpoint's hostname without notice (`prod-autodetect.outlookmobile.com` has previously returned a DNS `NXDOMAIN` error). To stay resilient, the script:
+
+1. Tries `prod-autodetect.outlookmobile.com` first (the historically documented endpoint)
+2. Falls back to `prod.autodetect.outlook.cloud.microsoft` if that fails
+3. Falls back to `autodetect.outlookmobile.com` as a last resort
+4. Reports clearly which endpoint (if any) actually responded
+
+If all three fail, try the manual tool at https://aka.ms/autodetect, or check whether Microsoft has published a newer endpoint.
 
 ## Direct-parameter mode (for scripting / RMM)
 
@@ -91,7 +104,7 @@ If running the saved `.ps1` file directly (rather than the quick-run one-liner a
 ## Recommended test process
 
 1. Snapshot a clean test VM (e.g. Windows 11 with new Outlook installed).
-2. Use **Test Mode** against a test domain — confirm DNS results look correct.
+2. Use **Test Mode** against a test domain — confirm DNS results look correct and check which autodetect endpoint responds.
 3. Add a real test mailbox in new Outlook on the VM, let it fail.
 4. Use **option 1 (Refresh autodiscover cache)** against that real test mailbox to confirm the cache-refresh step works, then try re-adding the account.
 5. If the account still won't add, use **option 2 (Reset new Outlook)** separately.

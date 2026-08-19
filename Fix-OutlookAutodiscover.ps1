@@ -130,21 +130,52 @@ function Invoke-AutodiscoverCacheRefresh {
     Write-Host " it does not delete or clear any mailbox/account data.)" -ForegroundColor DarkGray
     Write-Host ""
 
-    try {
-        $uri = "https://prod-autodetect.outlookmobile.com/detect?services=office365,outlook,google,icloud,yahoo&protocols=rest-cloud,rest-outlook,rest-office365,eas,imap,smtp"
-        $response = Invoke-WebRequest -Uri $uri -Headers @{ "x-email" = $EmailAddress } -UseBasicParsing -ErrorAction Stop
-        Write-Host "Request sent successfully (HTTP $($response.StatusCode))." -ForegroundColor Green
-        Write-Host ""
-        Write-Host "Response headers:" -ForegroundColor DarkGray
-        $response.Headers | Format-Table -AutoSize | Out-String | Write-Host
-    }
-    catch {
-        Write-Host "The refresh request failed: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "You can still continue and try adding the account again - this step is often silent even when it works." -ForegroundColor Yellow
+    # Microsoft has changed this endpoint's hostname before without notice (the original
+    # prod-autodetect.outlookmobile.com host can return NXDOMAIN). Try known candidates
+    # in order and use whichever one actually resolves and responds.
+    $candidateHosts = @(
+        "prod-autodetect.outlookmobile.com",
+        "prod.autodetect.outlook.cloud.microsoft",
+        "autodetect.outlookmobile.com"
+    )
+
+    $succeeded = $false
+
+    foreach ($hostName in $candidateHosts) {
+        Write-Host "Trying endpoint: $hostName ..." -ForegroundColor DarkGray
+        try {
+            Resolve-DnsName -Name $hostName -ErrorAction Stop | Out-Null
+        }
+        catch {
+            Write-Host "  DNS lookup failed for $hostName (name does not exist) - trying next candidate." -ForegroundColor DarkYellow
+            continue
+        }
+
+        try {
+            $uri = "https://$hostName/detect?services=office365,outlook,google,icloud,yahoo&protocols=rest-cloud,rest-outlook,rest-office365,eas,imap,smtp"
+            $response = Invoke-WebRequest -Uri $uri -Headers @{ "x-email" = $EmailAddress } -UseBasicParsing -ErrorAction Stop
+            Write-Host "  Success via $hostName (HTTP $($response.StatusCode))." -ForegroundColor Green
+            Write-Host ""
+            Write-Host "Response headers:" -ForegroundColor DarkGray
+            $response.Headers | Format-Table -AutoSize | Out-String | Write-Host
+            $succeeded = $true
+            break
+        }
+        catch {
+            Write-Host "  Request to $hostName failed: $($_.Exception.Message)" -ForegroundColor DarkYellow
+        }
     }
 
     Write-Host ""
-    Write-Host "Cache refresh request complete." -ForegroundColor Green
+    if ($succeeded) {
+        Write-Host "Cache refresh request complete." -ForegroundColor Green
+    }
+    else {
+        Write-Host "None of the known Microsoft autodetect endpoints responded." -ForegroundColor Red
+        Write-Host "This can happen if Microsoft has changed the endpoint again. Try the" -ForegroundColor Yellow
+        Write-Host "manual tool instead: https://aka.ms/autodetect" -ForegroundColor Yellow
+        Write-Host "You can still continue and try adding the account again - this step is often silent even when it works." -ForegroundColor Yellow
+    }
     Write-Host ""
 }
 
@@ -404,6 +435,11 @@ function Show-About {
     Write-Host "New Outlook has no PST/OST file like classic Outlook - all mail lives" -ForegroundColor White
     Write-Host "on the server. The backup option copies the local Olk cache/drafts" -ForegroundColor White
     Write-Host "folder as an extra safety net before any reset, not a full mail backup." -ForegroundColor White
+    Write-Host ""
+    Write-Host "The Microsoft autodetect endpoint used by cache refresh has changed" -ForegroundColor White
+    Write-Host "hostname before without notice. This tool tries several known" -ForegroundColor White
+    Write-Host "candidate hostnames automatically; if all fail, try https://aka.ms/autodetect" -ForegroundColor White
+    Write-Host "manually." -ForegroundColor White
     Write-Host ""
     Write-Host "Repo: https://github.com/danieljezweb/outlook-autodiscover-fix" -ForegroundColor DarkGray
     Write-Host ""
