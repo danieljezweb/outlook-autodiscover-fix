@@ -10,7 +10,7 @@ New Outlook for Windows doesn't query the mail server directly for autodiscover 
 - Loop on sign-in
 - Prompt for an "app password" (which Axigen doesn't support)
 
-This script forces Microsoft's cache to refresh for the affected email address, and optionally resets new Outlook so it picks up the corrected settings cleanly. **It does not delete or clear any mailbox/account data anywhere** — it only tells Microsoft to re-check its cached settings, and the optional Outlook reset only clears the local Outlook profile on that one PC.
+This tool refreshes Microsoft's cache for the affected email address, and separately can reset new Outlook so it picks up the corrected settings cleanly. **It does not delete or clear any mailbox/account data anywhere** — refreshing the cache never touches Outlook at all, and the separate reset option only clears the local Outlook profile on that one PC.
 
 ## Quick run (no download needed)
 
@@ -34,20 +34,22 @@ The `-ExecutionPolicy Bypass` only applies to this one launch; it does not chang
 Running the script with no parameters shows:
 
 ```
-1. Fix a failing account (refresh cache + optional Outlook reset)
-2. Test Mode - check DNS + refresh cache only (safe, no Outlook changes)
-3. WhatIf Mode - dry run of the full flow (safe, for demos)
-4. Backup local Outlook data (recommended before any reset)
-5. Reset new Outlook only (local profile/cache, no cache refresh)
+1. Refresh autodiscover cache (fix a failing account - no Outlook changes)
+2. Reset new Outlook (local profile/cache only)
+3. Backup local Outlook data (recommended before a reset)
+4. Test Mode - check DNS + refresh cache only (safe, no Outlook changes)
+5. WhatIf Mode - dry run of a full fix + reset flow (safe, for demos)
 6. About this tool
 7. Exit
 ```
 
-- **Option 1** is the normal client-facing fix: prompts for the email address, refreshes Microsoft's autodiscover cache, then asks before optionally resetting new Outlook (with a backup prompt first).
-- **Option 2 (Test Mode)** checks autodiscover DNS records (CNAME/A + SRV) for the domain and sends the cache-refresh request, but never touches Outlook and doesn't need a real mailbox. Safe to run against production domains.
-- **Option 3 (WhatIf Mode)** runs the full flow for real, except the Outlook reset step is only simulated — useful for demos or training without risking a real profile.
-- **Option 4 (Backup)** copies new Outlook's local data folder and signatures to a timestamped folder on the Desktop, as a safety net before any reset. See below for what this actually covers.
-- **Option 5** just resets new Outlook's local profile/cache on its own (also offering a backup first), for cases where the account is already set up correctly but Outlook itself is stuck.
+Refreshing the cache and resetting Outlook are **two completely separate options** — running option 1 never touches Outlook, and option 2 never touches Microsoft's autodiscover cache. This keeps each action predictable and means nobody accidentally resets a profile while just trying to fix a cache issue.
+
+- **Option 1** is the normal client-facing fix: prompts for the email address and refreshes Microsoft's autodiscover cache only.
+- **Option 2** resets new Outlook's local profile/cache on its own, offering a backup first. Use this for cases where the account is already set up correctly but Outlook itself is stuck.
+- **Option 3 (Backup)** copies new Outlook's local data folder and signatures to a timestamped folder on the Desktop, as a safety net before any reset. See below for what this actually covers.
+- **Option 4 (Test Mode)** checks autodiscover DNS records (CNAME/A + SRV) for the domain and sends the cache-refresh request, but never touches Outlook and doesn't need a real mailbox. Safe to run against production domains.
+- **Option 5 (WhatIf Mode)** runs the full fix + reset flow for demonstration purposes, with the Outlook reset step only simulated — useful for demos or training without risking a real profile.
 - **Option 6** shows a short explanation of what the tool does and doesn't do.
 
 ## About the backup option
@@ -69,6 +71,8 @@ Parameters can be passed directly to skip the menu entirely, e.g. for pushing vi
 .\Fix-OutlookAutodiscover.ps1 -EmailAddress name@client-domain.com.au
 ```
 
+This refreshes the autodiscover cache only — it will not touch Outlook. To reset Outlook via script/RMM as well, run the tool separately with `-Menu` and select option 2, or call it interactively.
+
 ```powershell
 .\Fix-OutlookAutodiscover.ps1 -TestMode -EmailAddress test@yourtestdomain.com.au
 ```
@@ -89,8 +93,9 @@ If running the saved `.ps1` file directly (rather than the quick-run one-liner a
 1. Snapshot a clean test VM (e.g. Windows 11 with new Outlook installed).
 2. Use **Test Mode** against a test domain — confirm DNS results look correct.
 3. Add a real test mailbox in new Outlook on the VM, let it fail.
-4. Use **option 1 (Fix a failing account)** against that real test mailbox to confirm the fix works end-to-end.
-5. Revert the VM snapshot and repeat for other scenarios as needed.
+4. Use **option 1 (Refresh autodiscover cache)** against that real test mailbox to confirm the cache-refresh step works, then try re-adding the account.
+5. If the account still won't add, use **option 2 (Reset new Outlook)** separately.
+6. Revert the VM snapshot and repeat for other scenarios as needed.
 
 ## If it still fails
 

@@ -42,7 +42,8 @@
 
 .EXAMPLE
     .\Fix-OutlookAutodiscover.ps1 -EmailAddress name@client-domain.com.au
-    Skips the menu, runs the full fix directly (still prompts before resetting Outlook).
+    Skips the menu, refreshes the autodiscover cache only (Outlook reset is a
+    separate action - use -Menu to access it interactively).
 #>
 
 param(
@@ -283,10 +284,12 @@ function Confirm-BackupBeforeReset {
 # Menu actions
 # ===================================================================
 
-function Run-StandardFix {
-    Show-Header -Subtitle "Standard Fix"
-    Write-Host "This refreshes Microsoft's autodiscover cache for a failing account," -ForegroundColor White
-    Write-Host "then optionally resets new Outlook's local profile." -ForegroundColor White
+function Run-CacheRefreshOnly {
+    Show-Header -Subtitle "Refresh Autodiscover Cache"
+    Write-Host "This tells Microsoft to refresh its cached autodiscover settings for" -ForegroundColor White
+    Write-Host "a failing account. It does NOT touch Outlook itself in any way." -ForegroundColor White
+    Write-Host "If you need to reset Outlook as well, use the separate 'Reset new" -ForegroundColor White
+    Write-Host "Outlook' option on the main menu." -ForegroundColor White
     Write-Host ""
 
     $email = $null
@@ -297,16 +300,7 @@ function Run-StandardFix {
     Write-Host ""
     Invoke-AutodiscoverCacheRefresh -EmailAddress $email
 
-    $resetAnswer = Read-Host "Do you also want to reset new Outlook now (clears local accounts/cache, you'll re-add accounts after)? (y/N)"
-    Write-Host ""
-    if ($resetAnswer -match "^[Yy]") {
-        Confirm-BackupBeforeReset
-        Invoke-OutlookReset
-    }
-    else {
-        Write-Host "Skipping Outlook reset. Try adding/re-adding the account in new Outlook now." -ForegroundColor Cyan
-    }
-
+    Write-Host "Try adding/re-adding the account in new Outlook now." -ForegroundColor Cyan
     Show-Footer
 }
 
@@ -403,8 +397,9 @@ function Show-About {
     Write-Host ""
     Write-Host "This tool tells Microsoft to refresh that cached data. It does NOT" -ForegroundColor White
     Write-Host "delete or clear any mailbox/account data anywhere - server-side or" -ForegroundColor White
-    Write-Host "otherwise. The optional Outlook reset only clears the LOCAL Outlook" -ForegroundColor White
-    Write-Host "profile/cache on this PC." -ForegroundColor White
+    Write-Host "otherwise. Refreshing the cache and resetting Outlook are two separate" -ForegroundColor White
+    Write-Host "actions on the main menu - the cache refresh never touches Outlook," -ForegroundColor White
+    Write-Host "and the reset only clears the LOCAL Outlook profile/cache on this PC." -ForegroundColor White
     Write-Host ""
     Write-Host "New Outlook has no PST/OST file like classic Outlook - all mail lives" -ForegroundColor White
     Write-Host "on the server. The backup option copies the local Olk cache/drafts" -ForegroundColor White
@@ -424,11 +419,11 @@ function Show-MainMenu {
         Show-Header
         Write-Host "What would you like to do?" -ForegroundColor White
         Write-Host ""
-        Write-Host "  1. Fix a failing account (refresh cache + optional Outlook reset)" -ForegroundColor White
-        Write-Host "  2. Test Mode - check DNS + refresh cache only (safe, no Outlook changes)" -ForegroundColor White
-        Write-Host "  3. WhatIf Mode - dry run of the full flow (safe, for demos)" -ForegroundColor White
-        Write-Host "  4. Backup local Outlook data (recommended before any reset)" -ForegroundColor White
-        Write-Host "  5. Reset new Outlook only (local profile/cache, no cache refresh)" -ForegroundColor White
+        Write-Host "  1. Refresh autodiscover cache (fix a failing account - no Outlook changes)" -ForegroundColor White
+        Write-Host "  2. Reset new Outlook (local profile/cache only)" -ForegroundColor White
+        Write-Host "  3. Backup local Outlook data (recommended before a reset)" -ForegroundColor White
+        Write-Host "  4. Test Mode - check DNS + refresh cache only (safe, no Outlook changes)" -ForegroundColor White
+        Write-Host "  5. WhatIf Mode - dry run of a full fix + reset flow (safe, for demos)" -ForegroundColor White
         Write-Host "  6. About this tool" -ForegroundColor White
         Write-Host "  7. Exit" -ForegroundColor White
         Write-Host ""
@@ -436,11 +431,11 @@ function Show-MainMenu {
         Write-Host ""
 
         switch ($choice) {
-            "1" { Run-StandardFix;      Read-Host "`nPress Enter to return to the menu" }
-            "2" { Run-TestMode;         Read-Host "`nPress Enter to return to the menu" }
-            "3" { Run-WhatIfMode;       Read-Host "`nPress Enter to return to the menu" }
-            "4" { Run-BackupOnly;       Read-Host "`nPress Enter to return to the menu" }
-            "5" { Run-OutlookResetOnly; Read-Host "`nPress Enter to return to the menu" }
+            "1" { Run-CacheRefreshOnly; Read-Host "`nPress Enter to return to the menu" }
+            "2" { Run-OutlookResetOnly; Read-Host "`nPress Enter to return to the menu" }
+            "3" { Run-BackupOnly;       Read-Host "`nPress Enter to return to the menu" }
+            "4" { Run-TestMode;         Read-Host "`nPress Enter to return to the menu" }
+            "5" { Run-WhatIfMode;       Read-Host "`nPress Enter to return to the menu" }
             "6" { Show-About }
             "7" { Write-Host "Bye!" -ForegroundColor Cyan; return }
             default { Write-Host "Please enter a number from 1 to 7." -ForegroundColor Red; Start-Sleep -Seconds 1 }
@@ -484,15 +479,9 @@ else {
     }
 
     Invoke-AutodiscoverCacheRefresh -EmailAddress $EmailAddress
-
-    $resetAnswer = Read-Host "Do you also want to reset new Outlook now (clears local accounts/cache, you'll re-add accounts after)? (y/N)"
-    if ($resetAnswer -match "^[Yy]") {
-        if (-not $WhatIf) { Confirm-BackupBeforeReset }
-        Invoke-OutlookReset -DryRun:$WhatIf
-    }
-    else {
-        Write-Host "Skipping Outlook reset. Try adding/re-adding the account in new Outlook now." -ForegroundColor Cyan
-    }
+    Write-Host "Try adding/re-adding the account in new Outlook now." -ForegroundColor Cyan
+    Write-Host "(Cache refresh and Outlook reset are separate steps - use -Menu or run" -ForegroundColor DarkGray
+    Write-Host " the script with no parameters if you also need to reset Outlook.)" -ForegroundColor DarkGray
 
     Show-Footer
 }
