@@ -17,12 +17,17 @@ This script forces Microsoft's cache to refresh for the affected email address, 
 Open PowerShell and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/danieljezweb/outlook-autodiscover-fix/main/Fix-OutlookAutodiscover.ps1 -OutFile "$env:TEMP\Fix-Outlook.ps1"; & "$env:TEMP\Fix-Outlook.ps1"
+irm https://raw.githubusercontent.com/danieljezweb/outlook-autodiscover-fix/main/Fix-OutlookAutodiscover.ps1 -OutFile "$env:TEMP\Fix-Outlook.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\Fix-Outlook.ps1"
 ```
 
 This downloads the script to a temp folder and runs it interactively — it will prompt for the email address that's failing, then ask before making any changes to Outlook.
 
-> Note: a plain `irm ... | iex` one-liner works too, but won't let you pass parameters like `-TestMode`. Use the download-then-run form above if you need those.
+The `-ExecutionPolicy Bypass` only applies to this one launch of the script; it does not change any system-wide PowerShell setting on the machine. This is included by default because most Windows PCs have a `Restricted` execution policy out of the box, which otherwise blocks the script from running with an `UnauthorizedAccess` error.
+
+> Note: a plain `irm ... | iex` one-liner works too and avoids the execution-policy issue entirely (since the script runs in-memory rather than as a file), but won't let you pass parameters like `-TestMode`. Use it like this if you just need the default interactive run:
+> ```powershell
+> irm https://raw.githubusercontent.com/danieljezweb/outlook-autodiscover-fix/main/Fix-OutlookAutodiscover.ps1 | iex
+> ```
 
 ## Usage
 
@@ -39,6 +44,11 @@ Prompts for the email address, refreshes Microsoft's autodiscover cache, then as
 ```
 
 Same as above, but skips the email prompt.
+
+If running the saved `.ps1` file directly (rather than the quick-run one-liner above) and you hit an `UnauthorizedAccess`/`cannot be loaded because running scripts is disabled` error, either:
+
+- Run it via `powershell -ExecutionPolicy Bypass -File .\Fix-OutlookAutodiscover.ps1`, or
+- Run `Unblock-File .\Fix-OutlookAutodiscover.ps1` once, then run it normally.
 
 ### Test mode (safe, for validation before rollout)
 
